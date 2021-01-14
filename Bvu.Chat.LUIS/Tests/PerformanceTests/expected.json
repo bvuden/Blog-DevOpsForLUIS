@@ -1,0 +1,27 @@
+[
+    {
+      "text": "hi i want to book a vacation thanks",
+      "intent": "RequestVacation",
+      "entities": []
+    },
+    {
+      "text": "i need to request a paid time off for travel",
+      "intent": "RequestVacation",
+      "entities": []
+    },
+    {
+      "text": "I want to request a vacation to have time with my family",
+      "intent": "RequestVacation",
+      "entities": []
+    },
+    {
+      "text": "I would like to go hiking in the austrian alps",
+      "intent": "RequestVacation",
+      "entities": []
+    },
+    {
+      "text": "I want to take a trip to amsterdam and watch ajax play",
+      "intent": "RequestVacation",
+      "entities": []
+    }
+  ]

@@ -1,0 +1,114 @@
+parameters:
+  - name: DownloadBuildArtifactsBranchName
+
+steps:
+  - script: bf config:set:luis --appId $(LuisAppId) --authoringKey $(LuisAuthoringKey) --endpoint $(LuisEndpoint) --subscriptionKey $(LuisAuthoringKey)
+    displayName: Set LUIS config for bot framework cli
+    failOnStderr: true
+
+  - script: bf luis:version:import --in $(Build.SourcesDirectory)\Bvu.Chat.LUIS\App\chat.lu --versionId $(LuisVersionId)
+    displayName: Import LUIS app (lu) from source
+    failOnStderr: true
+     
+  - script: bf luis:train:run --versionId $(LuisVersionId) --wait
+    displayName: Train LUIS app
+    failOnStderr: true
+     
+  - script: bf luis:application:publish --versionId $(LuisVersionId) --staging
+    displayName: Publish LUIS app to staging endpoint
+    failOnStderr: true
+     
+  - powershell: |
+      # set environment variables
+      Write-Host "##vso[task.setvariable variable=luisEndpointKey]$(LuisPredictionKey)"
+      Write-Host "##vso[task.setvariable variable=luisEndpointRegion]$(LuisLocation)"
+      Write-Host "##vso[task.setvariable variable=luisAppId]$(LuisAppId)"
+      Write-Host "##vso[task.setvariable variable=luisIsStaging]true"
+    displayName: Set config for dotnet-nlu
+
+  - task: DotNetCoreCLI@2
+    displayName: Unit Test LUIS app
+    inputs:
+      command: custom
+      custom: nlu
+      arguments: test
+        --service luis
+        --utterances $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\UnitTests\utterances.json
+        --output $(Agent.TempDirectory)\unittest\output\results.json
+
+  - task: DotNetCoreCLI@2
+    displayName: Compare the unit test results with the expected results
+    inputs:
+      command: custom
+      custom: nlu
+      arguments: compare
+        --expected $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\UnitTests\expected.json
+        --actual $(Agent.TempDirectory)\unittest\output\results.json
+        --output-folder $(Build.ArtifactStagingDirectory)\unittest
+        --unit-test
+    continueOnError: true
+
+  - task: DotNetCoreCLI@2
+    displayName: Performance Test LUIS app
+    inputs:
+      command: custom
+      custom: nlu
+      arguments: test
+        --service luis
+        --utterances $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\PerformanceTests\utterances.json
+        --output $(Agent.TempDirectory)\performancetest\output\results.json
+
+  # this also creates a new baseline to use for regression testing
+  - task: DotNetCoreCLI@2
+    displayName: Compare the performance test results with the expected results
+    inputs:
+      command: custom
+      custom: nlu
+      arguments: compare
+        --expected $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\PerformanceTests\expected.json
+        --actual $(Agent.TempDirectory)\performancetest\output\results.json
+        --output-folder $(Build.ArtifactStagingDirectory)\performancetest
+             
+  - script: bf luis:version:delete --versionId $(LuisVersionId)
+    displayName: Delete temporary version
+    failOnStderr: true
+   
+  - task: PublishTestResults@2
+    displayName: Publish performance test results
+    inputs:
+      testResultsFormat: NUnit
+      testResultsFiles: $(Build.ArtifactStagingDirectory)\performancetest\TestResult.xml
+      testRunTitle: PerformanceTests        
+
+  - task: PublishTestResults@2
+    displayName: Publish unit test results
+    inputs:
+      testResultsFormat: NUnit
+      testResultsFiles: $(Build.ArtifactStagingDirectory)\unittest\TestResult.xml
+      testRunTitle: UnitTests
+      failTaskOnFailedTests: true            
+
+  - task: DownloadBuildArtifacts@0
+    displayName: Download latest performancetest results from target branch
+    enabled: true  #disable task for very first build because there will be no build artifact available for download 
+    inputs:
+      buildType: specific
+      project: $(System.TeamProject)
+      pipeline: $(Build.DefinitionName)
+      buildVersionToDownload: latestFromBranch
+      branchName: ${{parameters.DownloadBuildArtifactsBranchName}}
+      downloadType: single
+      artifactName: PerformanceTestResult
+      downloadPath: $(Agent.TempDirectory)\latestfrombranch
+
+  - task: DotNetCoreCLI@2
+    displayName: Compare the performance test results with the baseline
+    enabled: true #disable task for very first build because there is nothing to compare with
+    inputs:
+      command: custom
+      custom: nlu
+      arguments: compare
+        --expected $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\PerformanceTests\expected.json
+        --actual $(Agent.TempDirectory)\performancetest\output\results.json               
+        --test-settings $(Build.SourcesDirectory)\Bvu.Chat.LUIS\Tests\PerformanceTests\thresholds.yml
+        --baseline $(Agent.TempDirectory)\latestfrombranch\PerformanceTestResult\statistics.json # result from previous successful build

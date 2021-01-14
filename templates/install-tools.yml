@@ -1,0 +1,21 @@
+steps:
+  - task: NodeTool@0 #was added because BF tool was not compatible with newer node versions
+    inputs:
+      versionSpec: '12.x'
+    displayName: Use Node version 12.x  
+
+  - task: Npm@1
+    displayName: Install bot framework cli
+    inputs:
+      command: custom
+      customCommand: 'install @microsoft/botframework-cli -g'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Install dotnet-nlu'
+    inputs:
+      command: custom
+      custom: tool
+      arguments: install dotnet-nlu --tool-path $(Agent.TempDirectory)\bin
+      
+  - powershell: Write-Host "##vso[task.prependpath]$(Agent.TempDirectory)\bin"
+    displayName: Prepend .NET Core CLI tool path

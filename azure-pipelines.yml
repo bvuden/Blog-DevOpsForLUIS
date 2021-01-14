@@ -1,0 +1,91 @@
+# Pipeline for the blog post series on DevOps for luis on https://www.bartvanuden.com
+# Please make sure to replace the variable values starting with 'your' with your own values
+
+trigger:
+  - develop
+  - master
+  
+variables:
+  AzureSubscription: 'your azure subscription or service connection'
+  AzureSubscriptionId: 'your azure subscription id'
+  LuisLocation: 'westeurope'
+  LuisEndpoint: 'https://westeurope.cognitiveservices.azure.com/'
+  VmImage: 'windows-latest'
+stages:
+  - stage: PullRequest
+    displayName: Pull Request
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    jobs:
+    - job: Agentjob
+      displayName: Validate Pull Request
+      pool:
+        vmImage: $(VmImage)
+      variables:
+        LuisAppId: 'your LUIS app id'
+        LuisVersionId: 'pullrequest'
+      steps:
+        - task: AzureKeyVault@1
+          displayName: Get LUIS secrets from Azure keyvault
+          inputs:
+            azureSubscription: $(AzureSubscription)
+            KeyVaultName: 'bvu-blog-luis-akv'
+            SecretsFilter: 'LuisPredictionKey,LuisAuthoringKey'   
+  
+        - template: templates\install-tools.yml
+        - template: templates\build-test.yml
+          parameters:
+            DownloadBuildArtifactsBranchName: '$(System.PullRequest.TargetBranch)'
+
+  - stage: Build
+    dependsOn: [] # removes the implicit dependency on previous stage and causes this to run in parallel
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest')) # do not run in case of a pull request
+    jobs:
+    - job: CiBuildJob
+      displayName: CI Build
+      pool:
+        vmImage: $(VmImage)
+      variables:
+        LuisAppId: 'your LUIS app id'
+        LuisVersionId: 'ci'
+      steps:
+      - task: AzureKeyVault@1
+        displayName: Get LUIS secrets from Azure keyvault
+        inputs:
+          azureSubscription: $(AzureSubscription)
+          KeyVaultName: 'bvu-blog-luis-akv'
+          SecretsFilter: 'luisPredictionKey, LuisAuthoringKey'
+
+      - template: templates\install-tools.yml
+      - template: templates\build-test.yml
+        parameters:
+          DownloadBuildArtifactsBranchName: '$(Build.SourceBranch)'
+          
+      - task: PublishBuildArtifacts@1
+        displayName: Publish LUIS app source file
+        inputs:
+          PathtoPublish: '$(Build.SourcesDirectory)\Bvu.Chat.LUIS\App'
+          ArtifactName: 'LuisApp'
+          publishLocation: 'Container'
+  
+      - task: PublishBuildArtifacts@1
+        displayName: Publish performance test result
+        inputs:
+            PathtoPublish: $(Build.ArtifactStagingDirectory)\performancetest
+            ArtifactName: 'PerformanceTestResult'
+            publishLocation: 'Container'
+
+      - script: bf luis:convert -i $(Build.SourcesDirectory)\Bvu.Chat.LUIS\App\chat.lu -o $(Build.SourcesDirectory)\Bvu.Chat.LUIS\App\chat.json
+        displayName: Convert LUIS app artifact (lu to json)
+        failOnStderr: false
+
+      - powershell: |
+          $model= Get-content $(Build.SourcesDirectory)\Bvu.Chat.LUIS\App\chat.json | out-string | ConvertFrom-Json
+          $versionId = $model.versionId
+          Write-Host $versionId
+
+          # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/variables?view=azure-devops&tabs=yaml%2Cbatch#set-a-multi-job-output-variable
+          Write-Host "##vso[task.setvariable variable=luisVersion;isOutput=true]$versionId"           
+        displayName: Get LUIS app versionId from artifact
+        name: Versiontask
+
+            
