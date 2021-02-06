@@ -88,4 +88,51 @@ stages:
         displayName: Get LUIS app versionId from artifact
         name: Versiontask
 
+  - stage: QA
+    displayName: Deploy to QA
+    dependsOn: Build
+    variables:
+      LuisVersion: $[ stageDependencies.Build.CiBuildJob.outputs['Versiontask.luisVersion'] ]
+      ResourceGroupName: 'bvu-blog-luis-qa'
+      LuisAuthoringResourceName: 'bvu-chat-luis-authoring-qa'
+      LuisPredictionResourceName: 'bvu-chat-luis-prediction-qa'
+      LuisApplicationName: 'chat-qa'
+    jobs:
+      - deployment:
+        displayName: 'Deployment'
+        pool:
+          vmImage: $(VmImage)
+        environment: QA
+        strategy:
+          runOnce:
+            deploy:            
+              steps:
+                - template: templates\install-tools.yml
+                - template: templates\deploy.yml
+
+  - stage: PRD
+    displayName: Deploy to PRD
+    condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/main'))
+    dependsOn: 
+      - Build
+      - QA
+    variables:
+      LuisVersion: $[ stageDependencies.Build.CiBuildJob.outputs['Versiontask.luisVersion'] ]
+      ResourceGroupName: 'bvu-blog-luis-prd'
+      LuisAuthoringResourceName: 'bvu-chat-luis-authoring-prd'
+      LuisPredictionResourceName: 'bvu-chat-luis-prediction-prd'
+      LuisApplicationName: 'chat-prd'
+    jobs:
+      - deployment:
+        displayName: 'Deployment'
+        pool:
+          vmImage: $(VmImage)
+        environment: PRD
+        strategy:
+          runOnce:
+            deploy:            
+              steps:
+                - template: templates\install-tools.yml
+                - template: templates\deploy.yml
+
             

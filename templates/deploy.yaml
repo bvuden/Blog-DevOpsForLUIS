@@ -1,0 +1,61 @@
+steps:
+  - task: AzureCLI@2
+    displayName: Create LUIS resources
+    inputs:
+      azureSubscription: $(AzureSubscription)
+      scriptType: 'ps'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        # create resources
+        az group create -l $(LuisLocation) -n $(ResourceGroupName)
+        az cognitiveservices account create -n $(LuisAuthoringResourceName) -g $(ResourceGroupName) -l $(LuisLocation) --kind LUIS.Authoring --sku F0
+        az cognitiveservices account create -n $(LuisPredictionResourceName) -g $(ResourceGroupName) -l $(LuisLocation) --kind LUIS --sku S0
+
+        # get keys
+        $authoringKey = $(az cognitiveservices account keys list -n $(LuisAuthoringResourceName) -g $(ResourceGroupName) --query key1)
+        $predictionKey = $(az cognitiveservices account keys list -n $(LuisPredictionResourceName) -g $(ResourceGroupName) --query key1)
+
+        # set environment variables
+        Write-Host "##vso[task.setvariable variable=luisPredictionKey]$predictionKey"
+        Write-Host "##vso[task.setvariable variable=luisAuthoringKey]$authoringKey"
+  
+  - script: bf config:set:luis --authoringKey $(luisAuthoringKey) --endpoint $(LuisEndpoint) --subscriptionKey $(luisAuthoringKey) --versionId $(LuisVersion)
+    displayName: Set LUIS config for bot framework cli
+    failOnStderr: true
+
+  - script: bf luis:application:create --name $(LuisApplicationName)
+    displayName: Create LUIS application
+    continueOnError: true # task will fail if application already exists
+
+  - powershell: |
+      # $jsonString = bf luis:application:list
+      $jsonString = bf luis:application:list
+      $json = $jsonString | out-string | ConvertFrom-Json
+      $appId = $json[0].id
+      Write-Host $appId
+      # set environment variables
+      bf config:set:luis --appId $appId
+    displayName: Get AppId
+
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: $(AzureSubscription)
+      scriptType: 'ps'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        $token = $(az account get-access-token --query 'accessToken' -o tsv)
+        Write-Host $token
+        bf luis:application:assignazureaccount --accountName $(LuisPredictionResourceName) --azureSubscriptionId $(AzureSubscriptionId) --resourceGroup $(ResourceGroupName) --armToken "$token"
+    displayName: Add prediction resource to application
+
+  - script: bf luis:version:import --in $(Pipeline.Workspace)\LuisApp\chat.lu
+    displayName: Import LUIS app (lu) from artifact
+    failOnStderr: true # task will fail if any errors are written to stderr, f.e. when version already exists
+
+  - script: bf luis:train:run --wait
+    displayName: Train LUIS app
+    failOnStderr: true
+    
+  - script: bf luis:application:publish
+    displayName: Publish to LUIS production endpoint
+    failOnStderr: true
